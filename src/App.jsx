@@ -1623,8 +1623,7 @@ function App() {
     <div className="app-shell" id="home">
       <header className="topbar">
         <a className="brand" href="#home" onClick={() => { setActiveNav('Home'); setActivePage('dashboard'); setSettingsOpen(false) }}>
-          <BrandMark />
-          <span className="brand-name">daily<span>kudi</span></span>
+          <img className="brand-logo" src="/daily-kudi-logo.png" alt="Daily Kudi" />
         </a>
         <div className="header-right">
           <div className={`connection-indicator ${isOnline ? 'online' : 'offline'}`} role="status" aria-label={isOnline ? 'Online' : 'Offline'}>
