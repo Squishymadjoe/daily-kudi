@@ -1,0 +1,18 @@
+{
+  "applicationId": "daily-kudi",
+  "applicationName": "Daily Kudi",
+  "backupVersion": 1,
+  "exportedAt": "2026-11-01T10:00:00.000Z",
+  "transactions": [
+    {
+      "id": "restored-income",
+      "type": "income",
+      "amount": 24000,
+      "category": "Salary",
+      "description": "Restored record",
+      "date": "2026-11-01",
+      "createdAt": "2026-11-01T09:00:00.000Z"
+    }
+  ],
+  "customCategories": []
+}
