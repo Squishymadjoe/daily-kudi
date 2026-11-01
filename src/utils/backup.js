@@ -1,7 +1,8 @@
 import { isValidTransaction } from '../hooks/useTransactions.js'
+import { isKnownTransactionCategory, validateCustomCategories } from './categories.js'
 
 export const BACKUP_APPLICATION_ID = 'daily-kudi'
-export const BACKUP_VERSION = 1
+export const BACKUP_VERSION = 2
 export const BACKUP_APPLICATION_NAME = 'Daily Kudi'
 
 function localDateKey(date) {
@@ -11,14 +12,14 @@ function localDateKey(date) {
   return `${year}-${month}-${day}`
 }
 
-export function createBackup(transactions, exportedAt = new Date()) {
+export function createBackup(transactions, exportedAt = new Date(), customCategories = []) {
   return {
     applicationId: BACKUP_APPLICATION_ID,
     applicationName: BACKUP_APPLICATION_NAME,
     backupVersion: BACKUP_VERSION,
     exportedAt: exportedAt.toISOString(),
     transactions,
-    customCategories: [],
+    customCategories,
   }
 }
 
@@ -28,7 +29,7 @@ export function validateBackup(backup) {
   }
   if (backup.applicationId !== BACKUP_APPLICATION_ID
     || backup.applicationName !== BACKUP_APPLICATION_NAME
-    || backup.backupVersion !== BACKUP_VERSION) {
+    || ![1, BACKUP_VERSION].includes(backup.backupVersion)) {
     throw new Error('This backup is not compatible with this version of Daily Kudi.')
   }
   if (typeof backup.exportedAt !== 'string' || !Number.isFinite(Date.parse(backup.exportedAt))) {
@@ -38,9 +39,25 @@ export function validateBackup(backup) {
     throw new Error('The backup transactions must be a list.')
   }
 
+  let customCategories
+  if (backup.backupVersion === 1) {
+    if (backup.customCategories !== undefined
+      && (!Array.isArray(backup.customCategories) || backup.customCategories.length)) {
+      throw new Error('This older backup contains unsupported custom categories.')
+    }
+    customCategories = []
+  } else {
+    try {
+      customCategories = validateCustomCategories(backup.customCategories)
+    } catch (error) {
+      throw new Error(`The backup categories are invalid: ${error.message}`)
+    }
+  }
+
   const ids = new Set()
   for (const transaction of backup.transactions) {
-    if (!isValidTransaction(transaction)) {
+    if (!isValidTransaction(transaction)
+      || !isKnownTransactionCategory(transaction.type, transaction.category, customCategories)) {
       throw new Error('The backup contains a malformed transaction. Check its type, amount, date, and category.')
     }
     if (ids.has(transaction.id)) {
@@ -49,18 +66,7 @@ export function validateBackup(backup) {
     ids.add(transaction.id)
   }
 
-  if (!Array.isArray(backup.customCategories)
-    || backup.customCategories.some((category) => typeof category !== 'string' || !category.trim())) {
-    throw new Error('The backup custom categories are invalid.')
-  }
-  if (new Set(backup.customCategories).size !== backup.customCategories.length) {
-    throw new Error('The backup contains duplicate custom categories.')
-  }
-  if (backup.customCategories.length) {
-    throw new Error('This app version cannot restore custom categories.')
-  }
-
-  return { transactions: backup.transactions, customCategories: [] }
+  return { transactions: backup.transactions, customCategories }
 }
 
 export function parseBackup(contents) {
@@ -73,8 +79,8 @@ export function parseBackup(contents) {
   return validateBackup(backup)
 }
 
-export function downloadBackup(transactions, browser = globalThis, exportedAt = new Date()) {
-  const backup = createBackup(transactions, exportedAt)
+export function downloadBackup(transactions, browser = globalThis, exportedAt = new Date(), customCategories = []) {
+  const backup = createBackup(transactions, exportedAt, customCategories)
   const content = JSON.stringify(backup, null, 2)
   const blob = new browser.Blob([content], { type: 'application/json' })
   const url = browser.URL.createObjectURL(blob)

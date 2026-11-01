@@ -14,6 +14,7 @@ import {
   TRANSACTIONS_STORAGE_KEY,
   writeTransactionsToStorage,
 } from '../src/hooks/useTransactions.js'
+import { DEFAULT_CATEGORIES } from '../src/utils/categories.js'
 
 const exportedAt = new Date('2026-11-01T10:00:00.000Z')
 const transaction = {
@@ -59,9 +60,46 @@ test('malformed transactions, invalid amounts, dates, types, categories, and dup
   assert.throws(() => validateBackup({ ...createBackup([transaction, transaction]) }), /duplicate transaction IDs/)
 })
 
-test('invalid category metadata and unsupported custom categories are rejected', () => {
-  assert.throws(() => validateBackup({ ...createBackup([]), customCategories: ['   '] }), /custom categories are invalid/)
-  assert.throws(() => validateBackup({ ...createBackup([]), customCategories: ['Personal'] }), /cannot restore custom categories/)
+test('custom categories export and restore with transactions', () => {
+  const customCategory = {
+    name: 'Side income',
+    type: 'income',
+    icon: 'Wallet',
+    color: '#bd9a45',
+  }
+  const customTransaction = { ...transaction, type: 'income', category: 'Side income' }
+  const backup = createBackup([customTransaction], exportedAt, [customCategory])
+  assert.deepEqual(parseBackup(JSON.stringify(backup)), {
+    transactions: [customTransaction],
+    customCategories: [customCategory],
+  })
+})
+
+test('legacy version one backups restore default categories without custom category metadata', () => {
+  const legacyBackup = {
+    ...createBackup([transaction], exportedAt),
+    backupVersion: 1,
+  }
+  delete legacyBackup.customCategories
+  assert.deepEqual(parseBackup(JSON.stringify(legacyBackup)), {
+    transactions: [transaction],
+    customCategories: [],
+  })
+})
+
+test('invalid category metadata and unsupported transaction categories are rejected', () => {
+  assert.throws(() => validateBackup({
+    ...createBackup([]),
+    customCategories: [{ name: 'Side income', type: 'income', icon: 'MissingIcon', color: '#123456' }],
+  }), /categories are invalid/)
+  assert.throws(() => validateBackup({
+    ...createBackup([]),
+    customCategories: [{ name: 'salary', type: 'income', icon: 'Wallet', color: '#bd9a45' }],
+  }), /already exists/)
+  assert.throws(() => validateBackup({
+    ...createBackup([{ ...transaction, category: 'Unknown' }]),
+  }), /malformed transaction/)
+  assert.equal(DEFAULT_CATEGORIES.some((category) => category.name === 'Salary'), true)
 })
 
 test('export triggers a dated JSON download and releases the generated URL', async () => {
@@ -95,10 +133,12 @@ test('export triggers a dated JSON download and releases the generated URL', asy
     },
   }
 
-  downloadBackup([transaction], browser, exportedAt)
+  const customCategory = { name: 'Side income', type: 'income', icon: 'Wallet', color: '#bd9a45' }
+  downloadBackup([transaction], browser, exportedAt, [customCategory])
   assert.equal(downloadedName, 'daily-kudi-backup-2026-11-01.json')
   assert.equal(downloadContent.type, 'application/json')
   assert.deepEqual(JSON.parse(downloadContent.text).transactions, [transaction])
+  assert.deepEqual(JSON.parse(downloadContent.text).customCategories, [customCategory])
   assert.equal(revokedUrl, 'blob:daily-kudi-backup')
 })
 

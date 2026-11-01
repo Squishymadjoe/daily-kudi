@@ -38,7 +38,7 @@ export function isValidTransaction(transaction) {
     && Number.isFinite(transaction.amount)
     && transaction.amount > 0
     && typeof transaction.category === 'string'
-    && TRANSACTION_CATEGORIES[transaction.type].includes(transaction.category)
+    && transaction.category.trim()
     && typeof transaction.description === 'string'
     && isValidDate(transaction.date)
     && typeof transaction.createdAt === 'string'
@@ -126,5 +126,21 @@ export function useTransactions() {
     }
   }
 
-  return { transactions, saveTransactions, clearTransactions, persistenceError }
+  function replaceTransactionsInState(nextTransactions) {
+    setTransactions(nextTransactions)
+    setPersistenceError(null)
+  }
+
+  function setExternalPersistenceError(message) {
+    setPersistenceError(message)
+  }
+
+  return {
+    transactions,
+    saveTransactions,
+    clearTransactions,
+    replaceTransactionsInState,
+    setExternalPersistenceError,
+    persistenceError,
+  }
 }

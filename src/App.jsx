@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownLeft,
+  ArrowLeft,
   ArrowRight,
   ArrowUpRight,
+  BookOpen,
   BriefcaseBusiness,
   CalendarDays,
   CarFront,
@@ -14,6 +16,7 @@ import {
   EyeOff,
   FileDown,
   FileUp,
+  Gift,
   HeartPulse,
   Home,
   Download,
@@ -23,6 +26,8 @@ import {
   MessageCircle,
   MoreHorizontal,
   Pencil,
+  PawPrint,
+  Plane,
   Plus,
   ReceiptText,
   Search,
@@ -36,25 +41,15 @@ import {
   Trash2,
   Utensils,
   Wallet,
+  Wrench,
   X,
 } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+import packageJson from '../package.json'
 import './App.css'
+import HelpCentre from './components/HelpCentre'
 import { useTransactions } from './hooks/useTransactions'
+import { useCategories } from './hooks/useCategories'
 import { isWithinDateFilter } from './utils/dateFilter'
 import {
   buildFinancialReport,
@@ -64,17 +59,52 @@ import {
 } from './utils/financialReport'
 import { downloadBackup, parseBackup } from './utils/backup'
 import { getWholePercentages } from './utils/percentages'
+import { isValidNairaAmount } from './utils/money'
+import {
+  CATEGORY_ICONS,
+  CUSTOM_CATEGORIES_STORAGE_KEY,
+  DEFAULT_CATEGORIES,
+  createCustomCategory,
+  deleteCustomCategory,
+  getAllCategories,
+  renameCustomCategory,
+  validateCustomCategories,
+} from './utils/categories'
+import { clearFinancialData, writeFinancialData } from './utils/financialDataStorage'
+import { markOnboardingComplete, shouldShowOnboarding } from './utils/onboarding'
+import { TRANSACTIONS_STORAGE_KEY } from './hooks/useTransactions'
 
-const categoryOptions = [
-  { name: 'Food & Dining', icon: Utensils, color: '#d99b58' },
-  { name: 'Transport', icon: CarFront, color: '#79968a' },
-  { name: 'Shopping', icon: ShoppingBag, color: '#b48088' },
-  { name: 'Bills & utilities', icon: Smartphone, color: '#8b88b8' },
-  { name: 'Health', icon: HeartPulse, color: '#c77a68' },
-  { name: 'Housing', icon: Home, color: '#829bb0' },
-  { name: 'Salary', icon: BriefcaseBusiness, color: '#4d947a' },
-  { name: 'Other', icon: MoreHorizontal, color: '#a5a18e' },
-]
+const SpendingPieChart = lazy(() => import('./components/FinancialCharts').then((module) => ({
+  default: module.SpendingPieChart,
+})))
+const AnalyticsCharts = lazy(() => import('./components/FinancialCharts').then((module) => ({
+  default: module.AnalyticsCharts,
+})))
+
+const categoryIconComponents = {
+  BookOpen,
+  BriefcaseBusiness,
+  CarFront,
+  Gift,
+  HeartPulse,
+  Home,
+  Landmark,
+  MoreHorizontal,
+  PawPrint,
+  Plane,
+  ReceiptText,
+  ShoppingBag,
+  Smartphone,
+  Utensils,
+  Wallet,
+  Wrench,
+}
+
+function findCategory(categoryName, type, categories) {
+  return categories.find((category) => category.name === categoryName && category.type === type)
+    || categories.find((category) => category.name === 'Other' && category.type === type)
+    || DEFAULT_CATEGORIES.at(-1)
+}
 
 const currency = new Intl.NumberFormat('en-NG', {
   style: 'currency',
@@ -154,6 +184,53 @@ function useEscapeToClose(onEscape) {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+}
+
+function useDialogFocus() {
+  const dialogRef = useRef(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return undefined
+
+    const previousFocus = document.activeElement
+    const getFocusableElements = () => [...dialog.querySelectorAll(
+      'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => element.getClientRects().length > 0)
+    const focusableElements = getFocusableElements()
+    ;(focusableElements[0] || dialog).focus()
+
+    function keepFocusInside(event) {
+      if (event.key !== 'Tab') return
+      const currentElements = getFocusableElements()
+      if (!currentElements.length) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const first = currentElements[0]
+      const last = currentElements[currentElements.length - 1]
+      if (!dialog.contains(document.activeElement)) {
+        event.preventDefault()
+        first.focus()
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', keepFocusInside)
+    return () => {
+      document.removeEventListener('keydown', keepFocusInside)
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
+    }
+  }, [])
+
+  return dialogRef
 }
 
 function getAnalyticsRange(period, now, transactions) {
@@ -298,7 +375,7 @@ function BalanceCard({ balance, income, expenses }) {
           {visible ? <Eye size={18} /> : <EyeOff size={18} />}
         </button>
       </div>
-      <p className="balance-amount" aria-live="polite">{displayAmount}</p>
+      <p className="balance-amount" aria-live="polite"><span key={displayAmount}>{displayAmount}</span></p>
       <p className="balance-caption">Across all your records</p>
       <div className="balance-divider" />
       <div className="balance-stats">
@@ -306,7 +383,7 @@ function BalanceCard({ balance, income, expenses }) {
           <span className="stat-icon income-icon"><ArrowDownLeft size={15} /></span>
           <div>
             <p>Total Income</p>
-            <strong>{visible ? currency.format(income) : '₦ ••••••'}</strong>
+            <strong><span key={visible ? income : 'income-hidden'}>{visible ? currency.format(income) : '₦ ••••••'}</span></strong>
           </div>
         </div>
         <span className="balance-stat-divider" />
@@ -314,7 +391,7 @@ function BalanceCard({ balance, income, expenses }) {
           <span className="stat-icon expense-icon"><ArrowUpRight size={15} /></span>
           <div>
             <p>Total Expenses</p>
-            <strong>{visible ? currency.format(expenses) : '₦ ••••••'}</strong>
+            <strong><span key={visible ? expenses : 'expenses-hidden'}>{visible ? currency.format(expenses) : '₦ ••••••'}</span></strong>
           </div>
         </div>
       </div>
@@ -339,7 +416,7 @@ function QuickActions({ onAdd }) {
   )
 }
 
-function SpendingBreakdown({ data, totalExpenses, onMore }) {
+function SpendingBreakdown({ data, totalExpenses, onMore, categories }) {
   const chartData = useMemo(() => {
     const groups = data.reduce((result, transaction) => {
       if (transaction.type !== 'expense') return result
@@ -350,10 +427,10 @@ function SpendingBreakdown({ data, totalExpenses, onMore }) {
       .map(([name, value]) => ({
         name,
         value,
-        color: categoryOptions.find((category) => category.name === name)?.color || '#a5a18e',
+        color: findCategory(name, 'expense', categories).color,
       }))
       .sort((a, b) => b.value - a.value)
-  }, [data])
+  }, [data, categories])
   const percentages = getWholePercentages(chartData.map((category) => category.value))
 
   return (
@@ -366,26 +443,9 @@ function SpendingBreakdown({ data, totalExpenses, onMore }) {
       {chartData.length ? (
         <div className="spending-content">
           <div className="chart-wrap">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius="68%"
-                  outerRadius="92%"
-                  paddingAngle={4}
-                  stroke="none"
-                  cornerRadius={5}
-                >
-                  {chartData.map((item) => <Cell key={item.name} fill={item.color} />)}
-                </Pie>
-                <Tooltip
-                  formatter={(value) => currency.format(value)}
-                  contentStyle={{ border: '1px solid #e8e9e3', borderRadius: 12, fontSize: 12 }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="chart-loading" role="status">Loading chart…</div>}>
+              <SpendingPieChart data={chartData} currency={currency} />
+            </Suspense>
             <div className="chart-center">
               <span>Total expenses</span>
               <strong>{currency.format(totalExpenses)}</strong>
@@ -412,7 +472,7 @@ function SpendingBreakdown({ data, totalExpenses, onMore }) {
   )
 }
 
-function RecentTransactions({ transactions, onAdd, onEdit, onDelete }) {
+function RecentTransactions({ transactions, categories, onAdd, onEdit, onDelete }) {
   const [showAll, setShowAll] = useState(false)
 
   return (
@@ -429,8 +489,8 @@ function RecentTransactions({ transactions, onAdd, onEdit, onDelete }) {
       {transactions.length ? (
         <div className="transaction-list">
           {(showAll ? transactions : transactions.slice(0, 5)).map((transaction) => {
-            const category = categoryOptions.find((item) => item.name === transaction.category) || categoryOptions.at(-1)
-            const CategoryIcon = transaction.type === 'income' ? ArrowDownLeft : category.icon
+            const category = findCategory(transaction.category, transaction.type, categories)
+            const CategoryIcon = categoryIconComponents[category.icon] || MoreHorizontal
             return (
               <article className="transaction-row" key={transaction.id}>
                 <span className={`transaction-icon ${transaction.type}`}>
@@ -472,9 +532,9 @@ function RecentTransactions({ transactions, onAdd, onEdit, onDelete }) {
   )
 }
 
-function HistoryTransaction({ transaction, onEdit, onDelete }) {
-  const category = categoryOptions.find((item) => item.name === transaction.category) || categoryOptions.at(-1)
-  const CategoryIcon = category.icon
+function HistoryTransaction({ transaction, categories, onEdit, onDelete }) {
+  const category = findCategory(transaction.category, transaction.type, categories)
+  const CategoryIcon = categoryIconComponents[category.icon] || MoreHorizontal
   const date = new Date(`${transaction.date}T12:00:00`)
 
   return (
@@ -504,14 +564,14 @@ function HistoryTransaction({ transaction, onEdit, onDelete }) {
   )
 }
 
-function TransactionHistory({ transactions, persistenceError, onAdd, onEdit, onDelete }) {
+function TransactionHistory({ transactions, categories, persistenceError, onAdd, onEdit, onDelete }) {
   const [typeFilter, setTypeFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [dateFilter, setDateFilter] = useState('all')
   const [sortOrder, setSortOrder] = useState('newest')
   const [search, setSearch] = useState('')
 
-  const categories = useMemo(
+  const categoryNames = useMemo(
     () => [...new Set(transactions.map((transaction) => transaction.category))].sort((a, b) => a.localeCompare(b)),
     [transactions],
   )
@@ -542,7 +602,7 @@ function TransactionHistory({ transactions, persistenceError, onAdd, onEdit, onD
   }
 
   return (
-    <main className="dashboard history-page">
+    <main className="dashboard history-page screen-enter" key="history-screen">
       {persistenceError && <p className="storage-alert" role="alert">{persistenceError}</p>}
       <div className="history-title-row">
         <div>
@@ -579,7 +639,7 @@ function TransactionHistory({ transactions, persistenceError, onAdd, onEdit, onD
             <span className="sr-only">Filter by category</span>
             <select aria-label="Filter by category" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
               <option value="all">All categories</option>
-              {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+              {categoryNames.map((category) => <option key={category} value={category}>{category}</option>)}
             </select>
             <ChevronDown size={15} aria-hidden="true" />
           </label>
@@ -630,6 +690,7 @@ function TransactionHistory({ transactions, persistenceError, onAdd, onEdit, onD
               <HistoryTransaction
                 key={transaction.id}
                 transaction={transaction}
+                categories={categories}
                 onEdit={onEdit}
                 onDelete={onDelete}
               />
@@ -657,22 +718,7 @@ function TransactionHistory({ transactions, persistenceError, onAdd, onEdit, onD
   )
 }
 
-function AnalyticsTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  const item = payload[0]
-  const percentage = item.payload.percentage
-
-  return (
-    <div className="analytics-tooltip">
-      {label && <span>{label}</span>}
-      <strong>{item.name || item.payload.name}</strong>
-      <b>{currency.format(item.value)}</b>
-      {percentage !== undefined && <span>{percentage.toFixed(1)}% of expenses</span>}
-    </div>
-  )
-}
-
-function AnalyticsScreen({ transactions, persistenceError, onAdd, onShare }) {
+function AnalyticsScreen({ transactions, categories, persistenceError, onAdd, onShare }) {
   const [period, setPeriod] = useState('thisMonth')
   const [now] = useState(() => new Date())
   const selectedPeriod = analyticsPeriods.find((item) => item.id === period) || analyticsPeriods[2]
@@ -701,10 +747,10 @@ function AnalyticsScreen({ transactions, persistenceError, onAdd, onShare }) {
         name,
         amount,
         percentage: totals.expense > 0 ? (amount / totals.expense) * 100 : 0,
-        color: categoryOptions.find((category) => category.name === name)?.color || '#a5a18e',
+        color: findCategory(name, 'expense', categories).color,
       }))
       .sort((a, b) => b.amount - a.amount)
-  }, [periodTransactions, totals.expense])
+  }, [periodTransactions, totals.expense, categories])
 
   const trend = useMemo(
     () => buildSpendingTrend(periodTransactions, range, period),
@@ -771,7 +817,7 @@ function AnalyticsScreen({ transactions, persistenceError, onAdd, onShare }) {
   })
 
   return (
-    <main className="dashboard analytics-page">
+    <main className="dashboard analytics-page screen-enter" key="analytics-screen">
       {persistenceError && <p className="storage-alert" role="alert">{persistenceError}</p>}
       <div className="analytics-title-row">
         <div>
@@ -838,151 +884,17 @@ function AnalyticsScreen({ transactions, persistenceError, onAdd, onShare }) {
 
       {periodTransactions.length ? (
         <>
-          <section className="analytics-chart-grid">
-            <article className="analytics-panel category-chart-panel">
-              <div className="analytics-panel-heading">
-                <div>
-                  <p className="eyebrow">Where it goes</p>
-                  <h2>Spending breakdown</h2>
-                </div>
-                <span className="analytics-panel-total">{currency.format(totals.expense)}</span>
-              </div>
-              {categoryData.length ? (
-                <div className="analytics-category-content">
-                  <div className="analytics-donut-wrap">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categoryData}
-                          dataKey="amount"
-                          nameKey="name"
-                          innerRadius="65%"
-                          outerRadius="91%"
-                          paddingAngle={3}
-                          stroke="none"
-                          cornerRadius={5}
-                        >
-                          {categoryData.map((item) => <Cell key={item.name} fill={item.color} />)}
-                        </Pie>
-                        <Tooltip content={<AnalyticsTooltip />} position={{ x: 8, y: 8 }} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                    <div className="analytics-donut-center">
-                      <span>Total expenses</span>
-                      <strong>{currency.format(totals.expense)}</strong>
-                    </div>
-                  </div>
-                  <div className="analytics-category-legend">
-                    {categoryData.map((category) => (
-                      <div className="analytics-legend-row" key={category.name}>
-                        <span className="analytics-legend-dot" style={{ backgroundColor: category.color }} />
-                        <span className="analytics-legend-name">{category.name}</span>
-                        <span className="analytics-legend-percent">{category.percentage.toFixed(1)}%</span>
-                        <strong>{currency.format(category.amount)}</strong>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="analytics-chart-empty">No expenses in this period yet.</div>
-              )}
-            </article>
-
-            <article className="analytics-panel comparison-panel">
-              <div className="analytics-panel-heading">
-                <div>
-                  <p className="eyebrow">Money in and out</p>
-                  <h2>Income vs expenses</h2>
-                </div>
-                <span className={`comparison-net ${netSavings < 0 ? 'negative-value' : ''}`}>
-                  {netSavings >= 0 ? '+' : '−'}{currency.format(Math.abs(netSavings))}
-                </span>
-              </div>
-              <div className="analytics-bar-chart">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={comparisonData} margin={{ top: 12, right: 7, bottom: 4, left: 3 }}>
-                    <CartesianGrid stroke="#eef0e9" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fill: '#858c82', fontSize: 10 }} axisLine={false} tickLine={false} />
-                    <YAxis
-                      width={60}
-                      tick={{ fill: '#92988d', fontSize: 9 }}
-                      tickFormatter={(value) => compactCurrency.format(value)}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      formatter={(value, name) => [currency.format(value), name]}
-                      position={{ x: 8, y: 8 }}
-                      contentStyle={{ border: '1px solid #e8e9e3', borderRadius: 12, fontSize: 11 }}
-                    />
-                    <Bar dataKey="amount" name="Amount" radius={[6, 6, 0, 0]} maxBarSize={54}>
-                      {comparisonData.map((item) => <Cell key={item.name} fill={item.fill} />)}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="analytics-color-key">
-                {comparisonData.map((item) => (
-                  <span key={item.name}><i style={{ backgroundColor: item.fill }} />{item.name}</span>
-                ))}
-              </div>
-            </article>
-
-            <article className="analytics-panel trends-panel">
-              <div className="analytics-panel-heading">
-                <div>
-                  <p className="eyebrow">Over time</p>
-                  <h2>Spending trends</h2>
-                </div>
-                <span className="trend-group-label">
-                  <LineChartIcon size={14} />
-                  {trend.grouping === 'day' ? 'Daily' : trend.grouping === 'week' ? 'Weekly' : 'Monthly'}
-                </span>
-              </div>
-              <div className="analytics-trend-chart">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={trend.data} margin={{ top: 12, right: 10, bottom: 2, left: 2 }}>
-                    <defs>
-                      <linearGradient id="spendingTrendFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#51846a" stopOpacity={0.22} />
-                        <stop offset="95%" stopColor="#51846a" stopOpacity={0.015} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="#eef0e9" vertical={false} />
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fill: '#858c82', fontSize: 9 }}
-                      axisLine={false}
-                      tickLine={false}
-                      interval="preserveStartEnd"
-                      minTickGap={20}
-                    />
-                    <YAxis
-                      width={60}
-                      tick={{ fill: '#92988d', fontSize: 9 }}
-                      tickFormatter={(value) => compactCurrency.format(value)}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <Tooltip
-                      formatter={(value) => [currency.format(value), 'Expenses']}
-                      position={{ x: 8, y: 8 }}
-                      contentStyle={{ border: '1px solid #e8e9e3', borderRadius: 12, fontSize: 11 }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="expenses"
-                      name="Expenses"
-                      stroke="#4d8063"
-                      strokeWidth={2.2}
-                      fill="url(#spendingTrendFill)"
-                      activeDot={{ r: 5, stroke: '#fff', strokeWidth: 2 }}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </article>
-          </section>
+          <Suspense fallback={<div className="chart-loading analytics-loading" role="status">Loading analytics charts…</div>}>
+            <AnalyticsCharts
+              categoryData={categoryData}
+              comparisonData={comparisonData}
+              trend={trend}
+              netSavings={netSavings}
+              totals={totals}
+              currency={currency}
+              compactCurrency={compactCurrency}
+            />
+          </Suspense>
 
           {insights.length > 0 && (
             <section className="analytics-insights">
@@ -1022,6 +934,7 @@ function AnalyticsScreen({ transactions, persistenceError, onAdd, onShare }) {
 }
 
 function ShareSummaryDialog({ transactions, initialPeriod, onClose }) {
+  const dialogRef = useDialogFocus()
   const [period, setPeriod] = useState(initialPeriod)
   const [feedback, setFeedback] = useState('')
   const [generatedAt] = useState(() => new Date())
@@ -1058,7 +971,7 @@ function ShareSummaryDialog({ transactions, initialPeriod, onClose }) {
 
   return (
     <div className="dialog-backdrop share-dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="transaction-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+      <section ref={dialogRef} className="transaction-dialog share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title" tabIndex={-1}>
         <div className="dialog-heading">
           <div>
             <span className="dialog-icon settings"><Share2 size={20} /></span>
@@ -1145,20 +1058,21 @@ function BottomNavigation({ onAdd, active, onNavigate }) {
   )
 }
 
-function TransactionDialog({ type, transaction, onClose, onSave }) {
+function TransactionDialog({ type, transaction, categories, onClose, onSave }) {
+  const dialogRef = useDialogFocus()
   const [transactionType, setTransactionType] = useState(transaction?.type || type)
   const [category, setCategory] = useState(transaction?.category || (type === 'income' ? 'Salary' : 'Food & Dining'))
   const [amount, setAmount] = useState(transaction ? String(transaction.amount) : '')
   const [description, setDescription] = useState(transaction?.description || '')
   const [date, setDate] = useState(() => transaction?.date || getLocalDate())
   const [validationError, setValidationError] = useState('')
-  const options = categoryOptions.filter((item) => transactionType === 'income' ? ['Salary', 'Other'].includes(item.name) : item.name !== 'Salary')
+  const options = categories.filter((item) => item.type === transactionType && !item.archived)
 
   function changeType(event) {
     const nextType = event.target.value
     setTransactionType(nextType)
-    const nextCategories = categoryOptions.filter((item) => nextType === 'income' ? ['Salary', 'Other'].includes(item.name) : item.name !== 'Salary')
-    if (!nextCategories.some((item) => item.name === category)) setCategory(nextType === 'income' ? 'Salary' : 'Food & Dining')
+    const nextCategories = categories.filter((item) => item.type === nextType && !item.archived)
+    if (!nextCategories.some((item) => item.name === category)) setCategory(nextCategories[0]?.name || '')
   }
 
   function handleSubmit(event) {
@@ -1166,6 +1080,10 @@ function TransactionDialog({ type, transaction, onClose, onSave }) {
     const value = Number(amount)
     if (!Number.isFinite(value) || value <= 0 || !transactionType || !category.trim() || !date) {
       setValidationError('Enter an amount greater than zero and choose a type, category, and date.')
+      return
+    }
+    if (!isValidNairaAmount(value)) {
+      setValidationError('Enter an amount with no more than two decimal places (kobo).')
       return
     }
 
@@ -1185,7 +1103,7 @@ function TransactionDialog({ type, transaction, onClose, onSave }) {
 
   return (
     <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="transaction-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <section ref={dialogRef} className="transaction-dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabIndex={-1}>
         <div className="dialog-heading">
           <div>
             <span className={`dialog-icon ${transactionType}`}>{transactionType === 'income' ? <ArrowDownLeft size={20} /> : <ArrowUpRight size={20} />}</span>
@@ -1206,11 +1124,14 @@ function TransactionDialog({ type, transaction, onClose, onSave }) {
             <ChevronDown size={16} aria-hidden="true" />
           </div>
           <label className="form-label" htmlFor="transaction-amount">Amount</label>
-          <div className="amount-input-wrap"><span>₦</span><input id="transaction-amount" type="number" min="0.01" step="any" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></div>
+          <div className="amount-input-wrap"><span>₦</span><input id="transaction-amount" type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required autoFocus /></div>
           <label className="form-label" htmlFor="transaction-category">Category</label>
           <div className="select-wrap">
             <select id="transaction-category" value={category} onChange={(event) => setCategory(event.target.value)} required>
               {options.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
+              {transaction && categories
+                .filter((item) => item.type === transactionType && item.archived && item.name === category)
+                .map((item) => <option key={item.name} value={item.name}>{item.name} (historical)</option>)}
             </select>
             <ChevronDown size={16} aria-hidden="true" />
           </div>
@@ -1229,9 +1150,14 @@ function TransactionDialog({ type, transaction, onClose, onSave }) {
 
 function SettingsDialog({
   transactions,
+  customCategories,
+  categories,
+  categoryPersistenceError,
   onClose,
   onRestore,
   onClear,
+  onSaveCategories,
+  onShowIntroduction,
   isInstalled,
   canInstall,
   onInstall,
@@ -1239,14 +1165,21 @@ function SettingsDialog({
   onToggleInstallHelp,
   installInstructions,
 }) {
+  const dialogRef = useDialogFocus()
   const fileInputRef = useRef(null)
   const [feedback, setFeedback] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
   const [pendingBackup, setPendingBackup] = useState(null)
+  const [categoryForm, setCategoryForm] = useState(null)
+  const [categoryName, setCategoryName] = useState('')
+  const [categoryType, setCategoryType] = useState('expense')
+  const [categoryIcon, setCategoryIcon] = useState('MoreHorizontal')
+  const [categoryFormError, setCategoryFormError] = useState('')
+  const [settingsPage, setSettingsPage] = useState(null)
 
   function handleExport() {
     try {
-      downloadBackup(transactions)
+      downloadBackup(transactions, undefined, undefined, customCategories)
       setFeedback({ type: 'success', message: 'Your backup has been downloaded to this device.' })
     } catch (error) {
       console.error('Unable to export the Daily Kudi backup.', error)
@@ -1277,13 +1210,14 @@ function SettingsDialog({
 
   useEscapeToClose(() => {
     if (confirmation) cancelConfirmation()
+    else if (settingsPage) setSettingsPage(null)
     else onClose()
   })
 
   function confirmRestore() {
     if (!pendingBackup) return
-    if (onRestore(pendingBackup.transactions)) {
-      setFeedback({ type: 'success', message: `${pendingBackup.transactions.length} ${pendingBackup.transactions.length === 1 ? 'transaction was' : 'transactions were'} restored successfully.` })
+    if (onRestore(pendingBackup.transactions, pendingBackup.customCategories)) {
+      setFeedback({ type: 'success', message: `${pendingBackup.transactions.length} ${pendingBackup.transactions.length === 1 ? 'transaction and category list were' : 'transactions and category list were'} restored successfully.` })
       cancelConfirmation()
     } else {
       setFeedback({ type: 'error', message: 'The backup could not be saved. Your existing records have not been replaced.' })
@@ -1300,15 +1234,80 @@ function SettingsDialog({
     }
   }
 
+  function startCategoryForm(type = 'expense', category = null) {
+    setCategoryForm(category ? { original: category } : { original: null })
+    setCategoryName(category?.name || '')
+    setCategoryType(category?.type || type)
+    setCategoryIcon(category?.icon || 'MoreHorizontal')
+    setCategoryFormError('')
+  }
+
+  function saveCategory(event) {
+    event.preventDefault()
+    const draft = { name: categoryName.trim(), type: categoryType, icon: categoryIcon }
+    try {
+      let nextCategories
+      let nextTransactions = transactions
+      if (categoryForm.original) {
+        const result = renameCustomCategory(customCategories, categoryForm.original, draft, transactions)
+        nextCategories = result.customCategories
+        nextTransactions = result.transactions
+      } else {
+        nextCategories = createCustomCategory(customCategories, draft)
+      }
+      if (!onSaveCategories(nextTransactions, nextCategories)) {
+        setCategoryFormError('This category could not be saved. Your existing records have not been changed.')
+        return
+      }
+      setFeedback({
+        type: 'success',
+        message: categoryForm.original ? 'Category updated.' : 'Category added.',
+      })
+      setCategoryForm(null)
+      setCategoryFormError('')
+    } catch (error) {
+      setCategoryFormError(error.message || 'Check the category details and try again.')
+    }
+  }
+
+  function removeCategory(category) {
+    const inUse = transactions.some((transaction) => (
+      transaction.type === category.type && transaction.category === category.name
+    ))
+    const message = inUse
+      ? `"${category.name}" is used by saved transactions. Remove it from new entries and keep its historical label?`
+      : `Delete the "${category.name}" category?`
+    if (!window.confirm(message)) return
+
+    try {
+      const result = deleteCustomCategory(customCategories, category, transactions)
+      if (!onSaveCategories(transactions, result.customCategories)) {
+        setFeedback({ type: 'error', message: 'The category could not be removed. No data was changed.' })
+        return
+      }
+      setFeedback({
+        type: 'success',
+        message: result.archived
+          ? `"${category.name}" is archived. Its transaction history is preserved.`
+          : `"${category.name}" was deleted.`,
+      })
+      if (categoryForm?.original?.name === category.name && categoryForm.original.type === category.type) {
+        setCategoryForm(null)
+      }
+    } catch (error) {
+      setFeedback({ type: 'error', message: error.message || 'The category could not be removed.' })
+    }
+  }
+
   return (
     <div className="dialog-backdrop settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="transaction-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section ref={dialogRef} className="transaction-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1}>
         <div className="dialog-heading">
           <div>
             <span className="dialog-icon settings"><Settings size={20} /></span>
             <div>
-              <p className="eyebrow">Your preferences</p>
-              <h2 id="settings-title">Settings</h2>
+              <p className="eyebrow">{settingsPage ? 'Daily Kudi' : 'Your preferences'}</p>
+              <h2 id="settings-title">{settingsPage === 'privacy' ? 'Privacy policy' : settingsPage === 'about' ? 'About Daily Kudi' : settingsPage === 'help' ? 'Help Centre' : 'Settings'}</h2>
             </div>
           </div>
           <button className="icon-button close-dialog" type="button" onClick={onClose} aria-label="Close settings"><X size={19} /></button>
@@ -1322,8 +1321,8 @@ function SettingsDialog({
             <h3 id="settings-confirm-title">{confirmation === 'clear' ? 'Clear all data?' : 'Restore this backup?'}</h3>
             <p>
               {confirmation === 'clear'
-                ? 'This permanently removes all locally stored financial records and category labels from this device. This cannot be undone.'
-                : `Restoring will replace all ${transactions.length} current ${transactions.length === 1 ? 'record' : 'records'} with ${pendingBackup.transactions.length} ${pendingBackup.transactions.length === 1 ? 'record' : 'records'} from this backup. This cannot be undone.`}
+                ? 'This permanently removes transactions and custom categories saved by Daily Kudi in this browser. If you have no backup, clearing app or browser storage, losing this device, or some uninstall actions may make your records impossible to recover. Download a backup first if you may need these records.'
+                : `Restoring replaces all ${transactions.length} current ${transactions.length === 1 ? 'transaction' : 'transactions'} and custom categories with the validated backup. Your current data stays unchanged if you cancel or validation fails.`}
             </p>
             <div className="settings-confirm-actions">
               <button type="button" className="settings-secondary-action" onClick={cancelConfirmation}>Cancel</button>
@@ -1336,13 +1335,152 @@ function SettingsDialog({
               </button>
             </div>
           </div>
+        ) : settingsPage === 'help' ? (
+          <HelpCentre onBack={() => setSettingsPage(null)} />
+        ) : settingsPage === 'privacy' ? (
+          <div className="settings-content information-page">
+            <button type="button" className="information-back" onClick={() => setSettingsPage(null)}>
+              <ArrowLeft size={15} /> Back to Settings
+            </button>
+            <p className="information-intro">This policy describes how the Daily Kudi app handles information when you use it.</p>
+            <section className="settings-section policy-section">
+              <h3>What Daily Kudi does</h3>
+              <p>Daily Kudi helps you record income and expenses, review balances and spending, manage categories, and create local backups.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Information you enter</h3>
+              <p>Transactions may include the type, amount, category, description, date, and an app-generated record identifier and creation time. Custom categories include a name, transaction type, and selected icon and color.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Local storage and accounts</h3>
+              <p>Daily Kudi does not require registration or an account. Transaction and custom category records are saved in this browser’s LocalStorage on this device. The app does not automatically upload financial records to a Daily Kudi server or cloud account, and does not provide cloud synchronisation.</p>
+              <p>The service worker caches application files for offline use, not private transaction records. Your local records are not a synced or guaranteed archival copy: browser storage can be cleared, removed, unavailable, or lost with the device or browser profile.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Backups and sharing</h3>
+              <p>When you choose Export backup, Daily Kudi creates a JSON file on your device containing your transactions and custom categories. Restoring reads a file you select, validates it, and replaces local records and categories only after you confirm.</p>
+              <p>Backup files can contain sensitive financial details. Keep them somewhere private and secure; anyone who obtains an unprotected copy may be able to read it. Exported files are not deleted when you clear app data.</p>
+              <p>If you choose to share a financial summary, your browser’s share sheet or a WhatsApp link can send the report text to a destination you select. This is an optional action and sends information outside the app; review the summary and destination before sharing.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Deletion and uninstalling</h3>
+              <p>Use Settings → Clear all data to remove Daily Kudi’s locally stored transactions and custom categories. This cannot remove JSON backups you previously downloaded or data you separately shared.</p>
+              <p>Clearing this site’s browser storage removes local records. Uninstalling an installed PWA may leave or remove its browser storage depending on the browser and operating system. Back up records before clearing storage, uninstalling, changing browser profiles, or replacing a device.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Hosting and technical information</h3>
+              <p>The app is hosted on Netlify. Like other hosting providers, Netlify may process technical request information, such as IP address, browser details, and request time, to deliver and operate the site. This is separate from the app’s LocalStorage financial records; the app’s normal static-file requests do not include transaction contents. Netlify’s own privacy information governs its handling of hosting data.</p>
+            </section>
+            <section className="settings-section policy-section">
+              <h3>Questions</h3>
+              <p>No developer email or postal contact is published in this application. If a support channel was provided with the copy of Daily Kudi you use, please use that channel for privacy questions.</p>
+            </section>
+            <p className="policy-updated">Policy reviewed 1 November 2026.</p>
+          </div>
+        ) : settingsPage === 'about' ? (
+          <div className="settings-content information-page about-page">
+            <button type="button" className="information-back" onClick={() => setSettingsPage(null)}>
+              <ArrowLeft size={15} /> Back to Settings
+            </button>
+            <section className="about-brand-card">
+              <img src="/daily-kudi-logo.png" alt="Daily Kudi logo" />
+              <h3>Daily Kudi</h3>
+              <p className="about-tagline">Your offline expense tracker for Nigeria.</p>
+              <p>Record income and expenses, understand your spending, and keep your financial records on your device. Daily Kudi works offline after its app files have loaded.</p>
+              <span className="about-version">Version {packageJson.version}</span>
+            </section>
+            <button className="settings-action-row" type="button" onClick={() => setSettingsPage('privacy')}>
+              <span className="settings-action-icon"><ShieldCheck size={17} /></span>
+              <span><strong>Privacy policy</strong><small>How information is stored and handled</small></span>
+              <ArrowRight className="settings-action-arrow" size={16} />
+            </button>
+            <p className="about-contact-note">No developer contact details are currently provided in the app.</p>
+          </div>
         ) : (
           <div className="settings-content">
+            <section className="settings-section category-management-section">
+              <div className="settings-section-heading">
+                <span><Wallet size={16} /></span>
+                <div><h3>Transaction categories</h3><p>Keep income and spending organized your way</p></div>
+              </div>
+              {categoryPersistenceError && <p className="settings-category-error" role="alert">{categoryPersistenceError}</p>}
+              {['income', 'expense'].map((type) => (
+                <div className="managed-category-group" key={type}>
+                  <div className="managed-category-heading">
+                    <strong>{type === 'income' ? 'Income categories' : 'Expense categories'}</strong>
+                    <button type="button" onClick={() => startCategoryForm(type)} disabled={Boolean(categoryPersistenceError)}>
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
+                  <div className="managed-category-list">
+                    {categories.filter((category) => category.type === type).map((category) => {
+                      const Icon = categoryIconComponents[category.icon] || MoreHorizontal
+                      return (
+                        <div className="managed-category-row" key={`${category.type}:${category.name}`}>
+                          <span className="managed-category-icon" style={{ color: category.color }}><Icon size={16} /></span>
+                          <span className="managed-category-name">
+                            <strong>{category.name}</strong>
+                            {category.archived
+                              ? <small>Kept for transaction history</small>
+                              : category.isDefault && <small>Default category</small>}
+                          </span>
+                          {!category.isDefault && !category.archived && (
+                            <span className="managed-category-actions">
+                              <button type="button" aria-label={`Rename ${category.name}`} onClick={() => startCategoryForm(type, category)}><Pencil size={14} /></button>
+                              <button type="button" aria-label={`Delete ${category.name}`} onClick={() => removeCategory(category)}><Trash2 size={14} /></button>
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+              {categoryForm && (
+                <form className="category-editor" onSubmit={saveCategory}>
+                  <label className="form-label" htmlFor="custom-category-name">Category name</label>
+                  <input
+                    className="text-input"
+                    id="custom-category-name"
+                    type="text"
+                    maxLength={32}
+                    value={categoryName}
+                    onChange={(event) => setCategoryName(event.target.value)}
+                    required
+                    autoFocus
+                  />
+                  <label className="form-label" htmlFor="custom-category-type">Type</label>
+                  <div className="select-wrap">
+                    <select id="custom-category-type" value={categoryType} onChange={(event) => setCategoryType(event.target.value)} disabled={Boolean(categoryForm.original)}>
+                      <option value="income">Income</option>
+                      <option value="expense">Expense</option>
+                    </select>
+                    <ChevronDown size={16} aria-hidden="true" />
+                  </div>
+                  <label className="form-label" htmlFor="custom-category-icon">Icon</label>
+                  <div className="select-wrap">
+                    <select id="custom-category-icon" value={categoryIcon} onChange={(event) => setCategoryIcon(event.target.value)}>
+                      {CATEGORY_ICONS.map((icon) => <option key={icon.id} value={icon.id}>{icon.label}</option>)}
+                    </select>
+                    <ChevronDown size={16} aria-hidden="true" />
+                  </div>
+                  {categoryFormError && <p className="form-error" role="alert">{categoryFormError}</p>}
+                  <div className="category-editor-actions">
+                    <button type="button" className="settings-secondary-action" onClick={() => setCategoryForm(null)}>Cancel</button>
+                    <button type="submit" className="settings-destructive-action restore-action">
+                      <Check size={15} /> {categoryForm.original ? 'Save changes' : 'Add category'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </section>
+
             <section className="settings-section">
               <div className="settings-section-heading">
                 <span><Database size={16} /></span>
                 <div><h3>Data management</h3><p>{transactions.length} saved {transactions.length === 1 ? 'transaction' : 'transactions'}</p></div>
               </div>
+              <p className="settings-section-copy backup-safety-note">JSON backups contain transaction details and custom categories. Keep downloaded files private. Restore validates the file and asks before replacing local records.</p>
               <div className="settings-action-list">
                 <button className="settings-action-row" type="button" onClick={handleExport}>
                   <span className="settings-action-icon"><FileDown size={17} /></span>
@@ -1351,7 +1489,7 @@ function SettingsDialog({
                 </button>
                 <button className="settings-action-row" type="button" onClick={() => fileInputRef.current?.click()}>
                   <span className="settings-action-icon"><FileUp size={17} /></span>
-                  <span><strong>Restore backup</strong><small>Replace records from a Daily Kudi backup</small></span>
+                  <span><strong>Restore backup</strong><small>Review and confirm before replacing local records and categories</small></span>
                   <FileUp className="settings-action-arrow" size={16} />
                 </button>
                 <input
@@ -1394,18 +1532,41 @@ function SettingsDialog({
 
             <section className="settings-section">
               <div className="settings-section-heading">
-                <span><ShieldCheck size={16} /></span>
-                <div><h3>Privacy</h3><p>Private by design</p></div>
+                <span><Info size={16} /></span>
+                <div><h3>Getting started</h3><p>Revisit the Daily Kudi introduction</p></div>
               </div>
-              <p className="settings-section-copy">Your financial information is stored locally on your device. Daily Kudi does not require an account and does not send your financial records to an external server.</p>
+              <button className="install-help-toggle" type="button" onClick={onShowIntroduction}>View introduction again</button>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-heading">
+                <span><ShieldCheck size={16} /></span>
+                <div><h3>Privacy summary</h3><p>Your records stay under your control</p></div>
+              </div>
+              <ul className="privacy-summary-list">
+                <li>No account required</li>
+                <li>Financial records stored locally in this browser</li>
+                <li>No automatic cloud synchronisation</li>
+                <li>Back up and restore only when you choose</li>
+                <li>You control deletion of local records</li>
+              </ul>
+              <button className="install-help-toggle" type="button" onClick={() => setSettingsPage('privacy')}>Read privacy policy</button>
             </section>
 
             <section className="settings-section app-information">
               <div className="settings-section-heading">
-                <span><Info size={16} /></span>
-                <div><h3>App information</h3><p>Daily Kudi · Personal finance, on your phone</p></div>
+                <span><Wallet size={16} /></span>
+                <div><h3>About Daily Kudi</h3><p>Version {packageJson.version}</p></div>
               </div>
-              <p className="settings-section-copy">Backup version 1 · Your data stays in this browser unless you choose to export it.</p>
+              <button className="install-help-toggle" type="button" onClick={() => setSettingsPage('about')}>About Daily Kudi</button>
+            </section>
+
+            <section className="settings-section help-settings-section">
+              <div className="settings-section-heading">
+                <span><BookOpen size={16} /></span>
+                <div><h3>Help Centre</h3><p>Guides, answers, and troubleshooting</p></div>
+              </div>
+              <button className="install-help-toggle" type="button" onClick={() => setSettingsPage('help')}>Browse help topics</button>
             </section>
 
             <section className="settings-section clear-data-section">
@@ -1413,6 +1574,7 @@ function SettingsDialog({
                 <span><Trash2 size={16} /></span>
                 <div><h3>Clear all data</h3><p>Permanently remove local financial records and categories</p></div>
               </div>
+              <p className="clear-data-warning">Without a backup, clearing browser storage or losing this device may permanently remove your records.</p>
               <button className="clear-data-button" type="button" onClick={() => setConfirmation('clear')}>
                 <Trash2 size={15} /> Clear all data
               </button>
@@ -1429,8 +1591,94 @@ function SettingsDialog({
   )
 }
 
+function OnboardingDialog({ step, onStepChange, onFinish, storageError }) {
+  const dialogRef = useDialogFocus()
+  const steps = [
+    {
+      icon: Wallet,
+      eyebrow: 'Welcome to Daily Kudi',
+      title: 'A calmer way to track your money',
+      copy: 'Keep a clear, private record of the money that comes in and goes out, right on your device.',
+    },
+    {
+      icon: ArrowDownLeft,
+      eyebrow: 'Record as you go',
+      title: 'Add income and expenses in seconds',
+      copy: 'Choose Add income or Add expense, enter the amount, pick a category, and save. You can edit or remove a record later.',
+    },
+    {
+      icon: LineChartIcon,
+      eyebrow: 'See the bigger picture',
+      title: 'Your dashboard and analytics',
+      copy: 'Your dashboard shows your balance and recent spending. Analytics helps you explore income, expenses, categories, and trends over time.',
+    },
+    {
+      icon: ShieldCheck,
+      eyebrow: 'Private, on your device',
+      title: 'Your records stay yours',
+      copy: 'Transactions are stored in this browser on this device. Export a backup from Settings and restore it whenever you need to move or protect your records.',
+    },
+  ]
+  const current = steps[step]
+  const StepIcon = current.icon
+  const isLastStep = step === steps.length - 1
+
+  useEscapeToClose(onFinish)
+
+  return (
+    <div className="dialog-backdrop onboarding-backdrop">
+      <section ref={dialogRef} className="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" tabIndex={-1}>
+        <button className="onboarding-skip" type="button" onClick={onFinish}>Skip introduction</button>
+        <img className="onboarding-logo" src="/daily-kudi-logo.png" alt="Daily Kudi" />
+        <div className="onboarding-progress" aria-label={`Step ${step + 1} of ${steps.length}`}>
+          {steps.map((item, index) => (
+            <span className={index === step ? 'active' : index < step ? 'complete' : ''} key={item.eyebrow} />
+          ))}
+        </div>
+        <span className="onboarding-step-icon"><StepIcon size={24} /></span>
+        <p className="eyebrow">{current.eyebrow}</p>
+        <h1 id="onboarding-title">{current.title}</h1>
+        <p className="onboarding-copy">{current.copy}</p>
+        {storageError && <p className="settings-feedback error" role="alert">{storageError}</p>}
+        <div className="onboarding-actions">
+          {step > 0 && <button className="settings-secondary-action" type="button" onClick={() => onStepChange(step - 1)}>Back</button>}
+          <button
+            className="settings-destructive-action restore-action"
+            type="button"
+            onClick={() => isLastStep ? onFinish() : onStepChange(step + 1)}
+          >
+            {isLastStep ? 'Get Started' : 'Continue'} <ArrowRight size={16} />
+          </button>
+        </div>
+        <p className="onboarding-step-count">{step + 1} of {steps.length}</p>
+      </section>
+    </div>
+  )
+}
+
+function getInitialOnboardingOpen() {
+  try {
+    return shouldShowOnboarding(window.localStorage, [
+      TRANSACTIONS_STORAGE_KEY,
+      CUSTOM_CATEGORIES_STORAGE_KEY,
+    ])
+  } catch (error) {
+    console.error('Unable to check Daily Kudi onboarding status.', error)
+    return true
+  }
+}
+
 function App() {
-  const { transactions, saveTransactions, clearTransactions, persistenceError } = useTransactions()
+  const {
+    transactions,
+    saveTransactions,
+    replaceTransactionsInState,
+    setExternalPersistenceError,
+    persistenceError,
+  } = useTransactions()
+  const categoryState = useCategories()
+  const { customCategories, categoryPersistenceError } = categoryState
+  const categories = useMemo(() => getAllCategories(customCategories), [customCategories])
   const [dialogType, setDialogType] = useState(null)
   const [editingTransaction, setEditingTransaction] = useState(null)
   const [activeNav, setActiveNav] = useState('Home')
@@ -1441,6 +1689,9 @@ function App() {
   const [installPrompt, setInstallPrompt] = useState(null)
   const [isInstalled, setIsInstalled] = useState(false)
   const [installHelpOpen, setInstallHelpOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(getInitialOnboardingOpen)
+  const [onboardingStep, setOnboardingStep] = useState(0)
+  const [onboardingStorageError, setOnboardingStorageError] = useState('')
   const [isApplyingUpdate, setIsApplyingUpdate] = useState(false)
   const [updateError, setUpdateError] = useState(null)
   const updateReloadStarted = useRef(false)
@@ -1551,8 +1802,56 @@ function App() {
     setSharePeriod(period)
   }
 
-  function restoreTransactions(restoredTransactions) {
-    return saveTransactions(restoredTransactions)
+  function saveFinancialDataState(nextTransactions, nextCustomCategories) {
+    try {
+      const validatedCategories = validateCustomCategories(nextCustomCategories)
+      writeFinancialData(window.localStorage, nextTransactions, validatedCategories)
+      replaceTransactionsInState(nextTransactions)
+      categoryState.acceptCustomCategories(validatedCategories)
+      return true
+    } catch (error) {
+      console.error('Unable to save Daily Kudi records and categories together.', error)
+      setExternalPersistenceError('Your records and categories could not be saved. No changes were made.')
+      categoryState.setCategoryError('Your category changes could not be saved to this browser.')
+      return false
+    }
+  }
+
+  function restoreTransactions(restoredTransactions, restoredCategories) {
+    return saveFinancialDataState(restoredTransactions, restoredCategories)
+  }
+
+  function clearAllFinancialData() {
+    try {
+      clearFinancialData(window.localStorage)
+      replaceTransactionsInState([])
+      categoryState.acceptCustomCategories([])
+      return true
+    } catch (error) {
+      console.error('Unable to clear Daily Kudi records and categories.', error)
+      setExternalPersistenceError('Your records and categories could not be cleared. No changes were made.')
+      categoryState.setCategoryError('Your categories could not be cleared.')
+      return false
+    }
+  }
+
+  function finishOnboarding() {
+    try {
+      markOnboardingComplete(window.localStorage)
+      setOnboardingStorageError('')
+    } catch (error) {
+      console.error('Unable to save Daily Kudi onboarding status.', error)
+      setOnboardingStorageError('The introduction could not be marked complete in this browser. You can continue, but it may appear again after a reload.')
+    }
+    setOnboardingOpen(false)
+    setOnboardingStep(0)
+  }
+
+  function showIntroductionAgain() {
+    setSettingsOpen(false)
+    setOnboardingStep(0)
+    setOnboardingStorageError('')
+    setOnboardingOpen(true)
   }
 
   async function installApplication() {
@@ -1655,7 +1954,7 @@ function App() {
         </div>
       )}
 
-      {activePage === 'dashboard' ? <main className="dashboard" id="dashboard-home">
+      {activePage === 'dashboard' ? <main className="dashboard screen-enter" id="dashboard-home" key="dashboard-screen">
         {persistenceError && <p className="storage-alert" role="alert">{persistenceError}</p>}
         <div className="welcome-row">
           <div>
@@ -1674,10 +1973,12 @@ function App() {
           <SpendingBreakdown
             data={transactions}
             totalExpenses={totals.expense}
+            categories={categories}
             onMore={() => navigate('Analytics')}
           />
           <RecentTransactions
             transactions={transactions}
+            categories={categories}
             onAdd={setDialogType}
             onEdit={editTransaction}
             onDelete={deleteTransaction}
@@ -1692,6 +1993,7 @@ function App() {
       </main> : activePage === 'history' ? (
         <TransactionHistory
           transactions={transactions}
+          categories={categories}
           persistenceError={persistenceError}
           onAdd={setDialogType}
           onEdit={editTransaction}
@@ -1700,6 +2002,7 @@ function App() {
       ) : (
         <AnalyticsScreen
           transactions={transactions}
+          categories={categories}
           persistenceError={persistenceError}
           onAdd={setDialogType}
           onShare={openShareSummary}
@@ -1713,6 +2016,7 @@ function App() {
           key={editingTransaction?.id || dialogType}
           type={dialogType}
           transaction={editingTransaction}
+          categories={categories}
           onClose={() => {
             setDialogType(null)
             setEditingTransaction(null)
@@ -1730,15 +2034,28 @@ function App() {
       {settingsOpen && (
         <SettingsDialog
           transactions={transactions}
+          customCategories={customCategories}
+          categories={categories}
+          categoryPersistenceError={categoryPersistenceError}
           onClose={() => setSettingsOpen(false)}
           onRestore={restoreTransactions}
-          onClear={clearTransactions}
+          onClear={clearAllFinancialData}
+          onSaveCategories={saveFinancialDataState}
+          onShowIntroduction={showIntroductionAgain}
           isInstalled={isInstalled}
           canInstall={Boolean(installPrompt)}
           onInstall={installApplication}
           installHelpOpen={installHelpOpen}
           onToggleInstallHelp={() => setInstallHelpOpen((open) => !open)}
           installInstructions={installInstructions}
+        />
+      )}
+      {onboardingOpen && (
+        <OnboardingDialog
+          step={onboardingStep}
+          onStepChange={setOnboardingStep}
+          onFinish={finishOnboarding}
+          storageError={onboardingStorageError}
         />
       )}
     </div>

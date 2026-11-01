@@ -11,6 +11,21 @@
   --forest: #123d32;
   --cream: #f7f6f0;
   --serif: 'DM Serif Display', Georgia, serif;
+  --gold: #c9a34b;
+  --forest-soft: #315d42;
+  --ink: #293a30;
+  --muted: #68756a;
+  --surface: rgba(255, 255, 255, .86);
+  --surface-strong: #fff;
+  --glass-border: rgba(255, 255, 255, .78);
+  --shadow-card: 0 12px 34px rgba(27, 55, 39, .07);
+  --shadow-float: 0 18px 48px rgba(27, 55, 39, .13);
+  --radius-card: 18px;
+  --radius-control: 11px;
+  --space-section: 18px;
+  --motion-fast: 160ms;
+  --motion-normal: 240ms;
+  --motion-slow: 420ms;
 }
 
 * {
@@ -26,7 +41,11 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: var(--cream);
+  background:
+    radial-gradient(ellipse at 10% 12%, rgba(201, 163, 75, .075), transparent 35%),
+    radial-gradient(ellipse at 92% 25%, rgba(49, 93, 66, .075), transparent 36%),
+    var(--cream);
+  background-attachment: fixed;
 }
 
 button,

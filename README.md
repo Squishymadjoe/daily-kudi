@@ -21,9 +21,35 @@ Daily Kudi does not send reports to a backend.
 
 Open Settings to download all saved transactions as a versioned JSON backup or
 restore a compatible Daily Kudi backup. Restore validates the entire file and
-asks for confirmation before replacing local records. Settings also includes a
-confirmed action to clear local transaction data. No backup or restore data is
-uploaded to a server.
+asks for confirmation before replacing local records and categories. Settings
+also includes a confirmed action to clear local records and custom categories.
+Backup files contain sensitive financial details; downloaded files are not
+removed when app data is cleared. No backup or restore data is uploaded to a
+server.
+
+## Privacy and app information
+
+The Privacy Policy and About Daily Kudi screens are available in Settings.
+Daily Kudi stores transactions and custom categories in browser LocalStorage;
+it has no account requirement or automatic cloud sync. Optional summary
+sharing sends report text only when the user chooses a share destination.
+Netlify hosts the app and may process technical request information separately
+from the app's local financial records. Clearing browser storage can
+permanently remove local records, so keep a protected backup if you need one.
+
+## Onboarding and custom categories
+
+New users can take a short introduction to recording transactions, reading the
+dashboard and analytics, and keeping data private. It can be skipped and
+reopened from Settings. Completion is stored in LocalStorage; existing
+transaction or category data suppresses first-run onboarding after an update.
+
+Settings also lets you create, rename, and delete custom income and expense
+categories, with a choice of icons. Categories are stored locally under
+`daily-kudi-custom-categories`. Renaming updates matching transaction labels;
+deleting a category already used in transactions archives it so its history
+remains intact. Version 2 backups include custom categories and continue to
+restore version 1 backups.
 
 ## Install and use offline
 
